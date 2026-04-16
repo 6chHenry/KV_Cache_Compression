@@ -1,0 +1,12 @@
+{
+  "wikitext2_ppl": 39.8529,
+  "pg19_ppl": 13.7545,
+  "benchmark": {
+    "prompt_tokens": 21,
+    "generated_tokens": 200,
+    "prefill_sec": 0.0184,
+    "decode_sec": 0.7219,
+    "decode_tps": 277.06,
+    "peak_mem_mb": 147.9
+  }
+}

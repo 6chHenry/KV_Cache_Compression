@@ -1,0 +1,16 @@
+{
+  "wikitext2_ppl": 302.4096,
+  "pg19_ppl": 167.148,
+  "benchmark": {
+    "method": "streaming_llm",
+    "k_sink": 4,
+    "window_size": 512,
+    "prompt_tokens": 21,
+    "generated_tokens": 200,
+    "final_kv_len": 220,
+    "prefill_sec": 0.0096,
+    "decode_sec": 0.6539,
+    "decode_tps": 305.87,
+    "peak_mem_mb": 147.9
+  }
+}

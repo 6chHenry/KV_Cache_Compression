@@ -1,0 +1,17 @@
+{
+  "wikitext2_ppl": 42.2354,
+  "pg19_ppl": 31.3003,
+  "benchmark": {
+    "method": "snapkv",
+    "k_ratio": 0.5,
+    "obs_window": 32,
+    "local_window": 32,
+    "prompt_tokens": 21,
+    "generated_tokens": 200,
+    "kv_len_after_compress": 21,
+    "prefill_sec": 0.0093,
+    "decode_sec": 0.8645,
+    "decode_tps": 231.35,
+    "peak_mem_mb": 284.2
+  }
+}

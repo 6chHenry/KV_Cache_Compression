@@ -1,0 +1,41 @@
+{
+  "snapkv_sink": {
+    "wikitext2_ppl": 42.2271,
+    "pg19_ppl": 31.3026,
+    "benchmark": {
+      "prompt_tokens": 21,
+      "generated_tokens": 200,
+      "kv_len_after_compress": 220,
+      "prefill_sec": 0.0106,
+      "decode_sec": 0.8864,
+      "decode_tps": 225.62,
+      "peak_mem_mb": 288.6
+    }
+  },
+  "snapkv_adaptive": {
+    "wikitext2_ppl": 42.2354,
+    "pg19_ppl": 31.3003,
+    "benchmark": {
+      "prompt_tokens": 21,
+      "generated_tokens": 200,
+      "kv_len_after_compress": 220,
+      "prefill_sec": 0.0047,
+      "decode_sec": 0.8976,
+      "decode_tps": 222.82,
+      "peak_mem_mb": 288.6
+    }
+  },
+  "snapkv_sink_adaptive": {
+    "wikitext2_ppl": 42.2271,
+    "pg19_ppl": 31.3026,
+    "benchmark": {
+      "prompt_tokens": 21,
+      "generated_tokens": 200,
+      "kv_len_after_compress": 220,
+      "prefill_sec": 0.0049,
+      "decode_sec": 0.8976,
+      "decode_tps": 222.81,
+      "peak_mem_mb": 288.6
+    }
+  }
+}
