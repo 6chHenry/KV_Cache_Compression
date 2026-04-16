@@ -138,6 +138,8 @@ def compute_ppl(model, tokenizer, text, stride=512, max_length=2048):
 **方案C：分层策略**
 - 浅层保留更多 KV（语法信息重要），深层保留更少（语义更稀疏）
 
+可以复现TreeKV
+
 ---
 
 ## Phase 4：实验与评估
