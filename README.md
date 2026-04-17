@@ -4,6 +4,8 @@
 
 This project is my individual implementation of AI2801 NLP.
 
+![1776425019719](image/README/1776425019719.png)
+
 ---
 
 ## 方法概述
