@@ -32,6 +32,7 @@ pip install transformers datasets numpy
 ## 数据准备
 
 ```bash
+cd utils/
 python prepare_data.py
 ```
 
@@ -46,6 +47,7 @@ python prepare_data.py
 ## 运行各方法
 
 ```bash
+cd src/
 # Baseline（Full KV）
 python baseline.py
 

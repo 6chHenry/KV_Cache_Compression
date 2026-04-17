@@ -19,7 +19,7 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-CACHE_DIR  = os.path.join(os.path.dirname(__file__), "cache")
+CACHE_DIR  = os.path.join(os.path.dirname(__file__), "..", "cache")
 MODEL_NAME = "EleutherAI/pythia-70m"
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -266,7 +266,7 @@ def main():
             print(f"  {k}: {v}")
         results["benchmark"] = bench
 
-    out_path = os.path.join(os.path.dirname(__file__), "results_streaming_llm.json")
+    out_path = os.path.join(os.path.dirname(__file__), "..", "results", "results_streaming_llm.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"\n结果已保存至 {out_path}")

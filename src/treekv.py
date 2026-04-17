@@ -37,7 +37,6 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# src/ 目录的父目录是项目根，cache 在根目录下
 CACHE_DIR  = os.path.join(os.path.dirname(__file__), "..", "cache")
 ROOT_DIR   = os.path.join(os.path.dirname(__file__), "..")
 MODEL_NAME = "EleutherAI/pythia-70m"
@@ -389,7 +388,7 @@ def main():
             print(f"  {k}: {v}")
         results["benchmark"] = bench
 
-    out_path = os.path.join(os.path.dirname(__file__) ,"results_treekv.json")
+    out_path = os.path.join(os.path.dirname(__file__), "..", "results", "results_treekv.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"\n结果已保存至 {out_path}")
