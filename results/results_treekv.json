@@ -1,0 +1,18 @@
+{
+  "wikitext2_ppl": 41.8964,
+  "pg19_ppl": 31.1635,
+  "benchmark": {
+    "method": "treekv",
+    "k_ratio": 0.5,
+    "obs_window": 32,
+    "local_window": 32,
+    "n_levels": 4,
+    "prompt_tokens": 21,
+    "generated_tokens": 200,
+    "kv_len_after_compress": 21,
+    "prefill_sec": 0.0332,
+    "decode_sec": 4.4112,
+    "decode_tps": 45.34,
+    "peak_mem_mb": 286.4
+  }
+}

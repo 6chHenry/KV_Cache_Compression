@@ -389,7 +389,7 @@ def main():
             print(f"  {k}: {v}")
         results["benchmark"] = bench
 
-    out_path = os.path.join(ROOT_DIR, "results_treekv.json")
+    out_path = os.path.join(os.path.dirname(__file__) ,"results_treekv.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"\n结果已保存至 {out_path}")
