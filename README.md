@@ -4,7 +4,7 @@
 
 This project is my **individual** implementation for AI2801 NLP.
 
-**Group project (TieredKV)** — separate repo: [AI2801_NLPProject_Group](https://github.com/6chHenry/AI2801_NLPProject_Group)
+**Group project (TieredKV)** — [AI2801_NLPProject_Group](https://github.com/6chHenry/AI2801_NLPProject_Group) · Personal repo also published as [KV_Cache_Compression](https://github.com/6chHenry/KV_Cache_Compression)
 
 ![1776425019719](image/README/1776425019719.png)
 
