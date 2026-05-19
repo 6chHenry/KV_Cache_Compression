@@ -2,7 +2,9 @@
 
 在 **Pythia-70M** 上复现 StreamingLLM、SnapKV 和 TreeKV，并提出三种改进方案，在 wikitext-2 和 pg-19 数据集上进行 PPL 和速度评测。
 
-This project is my individual implementation of AI2801 NLP.
+This project is my **individual** implementation for AI2801 NLP.
+
+**Group project (TieredKV)** — separate repo: [AI2801_NLPProject_Group](https://github.com/6chHenry/AI2801_NLPProject_Group)
 
 ![1776425019719](image/README/1776425019719.png)
 
