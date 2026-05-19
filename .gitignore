@@ -1,4 +1,41 @@
-.claude/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local caches & downloads (re-run utils/prepare_data.py)
 cache/
+
+# IDE / agent
+.claude/
+.cursor/
+.vscode/
+
+# Personal notes (not for submission)
 Target.md
 task_plan.md
+findings.md
+progress.md
+
+# Group project (separate repo: llm_acceleration_group)
+group_work/
+src/tiered_kv.py
+src/integrated.py
+src/run_pg19_suite.py
+src/eval_pg19_baseline.py
+src/compare_ppl_protocol.py
+src/debug_kv_lens.py
+src/verify_treekv.py
+results/results_integrated.json
+results/results_pg19_suite*.json
+results/results_baseline_pg19_multi.json
+results/*.log
+
+# NeurIPS template bundle (group repo has group_work/neurips_2025.sty)
+NeurIPS模板/
+
+# OS
+.DS_Store
+Thumbs.db

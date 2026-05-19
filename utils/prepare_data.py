@@ -3,7 +3,7 @@
 """
 import os
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ── 1. Pythia-70M ──────────────────────────────────────────────────────────────
@@ -53,7 +53,6 @@ for i, sample in enumerate(pg19_stream):
 
 print(f"  已缓存 {len(samples)} 条 pg-19 样本 ✓")
 
-# 把这 5 条保存到本地 json，方便后续离线使用
 import json
 pg19_path = os.path.join(CACHE_DIR, "pg19_test_5samples.json")
 with open(pg19_path, "w", encoding="utf-8") as f:
