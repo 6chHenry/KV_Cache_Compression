@@ -1,6 +1,6 @@
 # LLM Efficient Inference：KV Cache 压缩方法复现与对比
 
-在 **Pythia-70M** 上复现 StreamingLLM、SnapKV 和 TreeKV，并提出三种改进方案，在 wikitext-2 和 pg-19 数据集上进行 PPL 和速度评测。
+在 **Pythia-70M** 上复现 StreamingLLM、SnapKV 和 TreeKV，并提出三种 SnapKV 改进（Sink 保护、Adaptive Per-Head、组合），在 wikitext-2 与 PG-19 上评测 PPL 与推理性能。
 
 This project is my **individual** implementation for AI2801 NLP.
 
@@ -17,7 +17,7 @@ This project is my **individual** implementation for AI2801 NLP.
 | `baseline.py` | Full KV Cache | 标准自回归推理，全量保留 KV Cache |
 | `streaming_llm.py` | StreamingLLM | 保留前 k_sink 个 Sink token + 最近 window_size 个 token，丢弃中间 |
 | `snapkv.py` | SnapKV | Prefill 阶段用末尾 obs_window 个 query 的 attention 选出重要 KV 位置 |
-| `src/treekv.py` | TreeKV | 几何预算分配：历史区按块分配 top-k 预算，近块多远块少（树形结构） |
+| `treekv.py` | TreeKV | 几何预算分配：历史区按块分配 top-k 预算，近块多远块少（树形结构） |
 | `improved.py` | 三种改进 | 在 SnapKV 基础上改进选取策略（见下方分析） |
 
 ---
@@ -27,8 +27,8 @@ This project is my **individual** implementation for AI2801 NLP.
 ```bash
 conda create -n llm_accel python=3.10
 conda activate llm_accel
-pip install torch --index-url https://download.pytorch.org/whl/cu118
-pip install transformers datasets numpy
+pip install -r requirements.txt
+# 或：pip install torch transformers datasets numpy
 ```
 
 ---
@@ -44,7 +44,7 @@ python prepare_data.py
 
 - Pythia-70M 模型权重
 - wikitext-2-raw-v1 测试集
-- pg-19 测试集前 5 个样本（保存为 `cache/pg19_test_5samples.json`）
+- pg-19 测试集前 5 个样本（`cache/pg19_test_5samples.json`）
 
 ---
 
@@ -52,17 +52,18 @@ python prepare_data.py
 
 ```bash
 cd src/
+
 # Baseline（Full KV）
 python baseline.py
 
 # StreamingLLM（k_sink=4, window=512）
 python streaming_llm.py --k_sink 4 --window_size 512 --max_eval_tokens 2048
 
-# SnapKV（k_ratio=0.5, 保留 50% KV）
+# SnapKV（k_ratio=0.5）
 python snapkv.py --k_ratio 0.5 --obs_window 32 --local_window 32
 
-# TreeKV（几何预算 top-k 选取，n_levels=4 → 预算比例 1:2:4:8）
-python src/treekv.py --k_ratio 0.5 --obs_window 32 --local_window 32 --n_levels 4
+# TreeKV（n_levels=4 → 块预算比 1:2:4:8）
+python treekv.py --k_ratio 0.5 --obs_window 32 --local_window 32 --n_levels 4
 
 # 改进方法（三种对比）
 python improved.py --k_ratio 0.5 --k_sink 4 --obs_window 32 --local_window 32
@@ -72,19 +73,50 @@ python improved.py --k_ratio 0.5 --k_sink 4 --obs_window 32 --local_window 32
 
 ## 实验结果
 
-### PPL 对比
+### PPL 对比（matched protocol，推荐）
+
+所有压缩方法与 Full KV 使用**相同**评测流程：prefill 上下文（最多 1536 token）→ 可选压缩 KV → 对 512-token target 前向；PG-19 为 **20 本书** token 加权均值 ± 标准差（`fp32` + `eager`）。
+
+| 方法 | WikiText-2 PPL ↓ | PG-19 PPL ↓ | Δ Wiki |
+| ------ | :--------------: | :-----------: | :------: |
+| Baseline (Full KV) | **39.38** | **36.67±11.92** | — |
+| SnapKV (k_ratio=0.5) | 42.24 | — | +7.3% |
+| TreeKV (k_ratio=0.5, n_levels=4) | **41.78** | 37.18±12.01 | +6.1% |
+| + Sink 保护 (snapkv_sink)† | 42.23 | 31.30‡ | +7.2% |
+| + Adaptive Per-Head† | 42.24 | 31.30‡ | +7.3% |
+| + Sink + Adaptive† | 42.23 | 31.30‡ | +7.2% |
+
+† 改进方法仍用**滑动窗口**协议（见下表），尚未在 20-book matched 流程上重跑。  
+‡ 单本书、8192 token、滑动窗口；与上表 PG-19 不可直接对比。
+
+> 数据来源：`results/results_baseline.json`（Wiki 与 matched baseline 对齐）、`results_pg19_suite_r050.json`（20-book PG-19 + TreeKV）、`results/results_snapkv.json`、`results/results_improved.json`。
+
+### PPL 对比（滑动窗口，短 prompt 历史结果）
+
+早期脚本默认协议：wikitext-2 全量 test；PG-19 **第 1 本书**前 8192 token；`max_length=2048`, `stride=512`。
 
 | 方法 | wikitext-2 PPL ↓ | pg-19 PPL ↓ |
 | ------ | :--------------: | :---------: |
-| Baseline (Full KV) | **39.85** | **13.75** |
+| Baseline (Full KV) | 39.85 | 13.75 |
 | StreamingLLM (k_sink=4, window=512) | 302.41 | 167.15 |
 | SnapKV (k_ratio=0.5) | 42.24 | 31.30 |
-| TreeKV (k_ratio=0.5, n_levels=4) | **41.90** | **31.16** |
-| + Sink 保护 (snapkv_sink) | 42.23 | 31.30 |
-| + Adaptive Per-Head (snapkv_adaptive) | 42.24 | 31.30 |
-| + Sink + Adaptive (snapkv_sink_adaptive) | 42.23 | 31.30 |
+| TreeKV (k_ratio=0.5, n_levels=4) | 41.90 | 31.16 |
+| + Sink 保护 | 42.23 | 31.30 |
+| + Adaptive Per-Head | 42.24 | 31.30 |
+| + Sink + Adaptive | 42.23 | 31.30 |
 
-### 速度 & 显存对比
+PG-19 **5 本书**滑动窗口 Baseline 均值：**16.67±4.2**（`results/results_baseline_pg19_multi.json`）。
+
+### 长上下文速度（4096-token prefill + 100-token decode）
+
+| 方法 | KV len | TTFT (s) | 端到端 TP (tok/s) ↑ | decode TP (tok/s) |
+| ------ | :----: | :------: | :-----------------: | :---------------: |
+| Full KV | 4096 | 0.64 | 3497 | 180 |
+| TreeKV (k_ratio=0.5) | 2064 | 0.40 | **4906** | 217 |
+
+> 配置：Pythia-70M，`fp32` + `eager`，PG-19 第 1 本书 prefill。TreeKV 在真实长 prompt 下 KV 减半，TTFT 降约 38%，端到端吞吐升约 **40%**（`results/results_pg19_suite.json`）。
+
+### 短 prompt 速度 & 显存（prompt=21, gen=200）
 
 | 方法 | decode tps ↑ | 峰值显存 (MB) ↓ | KV 压缩比 |
 | ------ | :----------: | :-------------: | :-------: |
@@ -96,46 +128,39 @@ python improved.py --k_ratio 0.5 --k_sink 4 --obs_window 32 --local_window 32
 | + Adaptive Per-Head | 223 | 289 | 0.5× |
 | + Sink + Adaptive | 223 | 289 | 0.5× |
 
-> **测试配置**：Pythia-70M，CUDA，fp32（eager）/ fp16（sdpa），prompt=21 tokens，生成 200 tokens。  
-> PPL 评估：wikitext-2 全量 test set（288k tokens），pg-19 前 8192 tokens，滑动窗口 max_length=2048 / stride=512。
+> Baseline 使用 `sdpa`+`fp16`；压缩方法为 `eager`+`fp32` 以取 attention，短 prompt 下 TreeKV decode 偏慢不代表长上下文表现。
 
 ---
 
 ## 结果分析
 
+### 评测协议差异（重要）
+
+早期表格中 Baseline PG-19 **13.75** 与压缩方法 **~31** 相差约 2.3×，主要来自**协议不一致**（滑动窗口 vs compress-and-evaluate），而非 TreeKV 本身劣化很多。在 matched protocol + 20-book PG-19 下，Full KV **36.67** vs TreeKV **37.18**（+1.4%），与 WikiText +6.1% 的趋势一致。
+
 ### StreamingLLM
 
-StreamingLLM 的 PPL 大幅高于 Baseline（302 vs 40），这是预期内的结果，**不意味着实现有误**。其设计目标是无限长序列的*稳定生成*，而非最小化 PPL：
-
-- token-by-token 推理时，中间大量上下文被丢弃，模型看不到足够的历史信息；
-- `k_sink=4, window=512` 配置下，有效上下文始终只有 ~516 token，而 wikitext-2 滑动窗口评估需要跨越更长距离的依赖；
-- 优势在于**显存恒定**（148 MB，与 Baseline 相同）且 decode 速度最快（306 tps）。
+PPL 远高于 Baseline（302 vs 40）是预期现象：设计目标是无限长流式生成，而非最小化 PPL。`k_sink=4, window=512` 时有效上下文约 516 token。优势是**显存恒定**（148 MB）且短 prompt decode 最快（306 tps）。
 
 ### SnapKV
 
-SnapKV 在 50% KV 压缩率下 PPL 仅损失约 6%（39.85 → 42.24），是有效的压缩方案。
-
-**显存反而更高**（284 MB vs 148 MB）的原因：SnapKV 使用 `attn_implementation="eager"` + `fp32` 以获取 attention weights，而 Baseline 使用 `sdpa` + `fp16`，前者的中间 attention tensor 占用更大。若在相同精度下比较，SnapKV 的 KV Cache 本身确实更小。
+50% KV 压缩下 WikiText PPL 约 +7.3%（39.38 → 42.24），是有效的均匀 top-k 基线。显存高于 Baseline 因 `eager`+`fp32` 中间 attention 开销；KV 本体更小。
 
 ### TreeKV
 
-TreeKV 在 50% 压缩率下 wikitext-2 PPL=41.90，**优于 SnapKV（42.24）**，是本实验中压缩方法里 PPL 最低的方案。
+Matched protocol 下 WikiText **41.78**、PG-19 **37.18±12.01**，在相同压缩率下优于 SnapKV（42.24），体现几何预算（块比 1:2:4:8）对局部性历史的适配。
 
-核心优势在于**几何预算分配**：将历史区均分为 n_levels=4 块，各块预算比例为 1:2:4:8（最旧块最少，最新历史块最多）。这一分配符合语言建模的局部性原理——越近的 token 对下一词预测贡献越大，给它们更多 KV 预算自然带来更低的 PPL。
+长 prompt（4096 prefill）下 KV 从 4096 压至 2064，TTFT 与端到端吞吐显著优于 Full KV；短 prompt micro-benchmark 中 decode 仅 45 tps，因 prompt 过短、压缩未体现收益。
 
-decode tps 仅 45（远低于 SnapKV 的 231），原因：同样使用 `eager + fp32`，且基准 prompt 只有 21 tokens（不触发压缩），decode 阶段 KV 无限增长，失去压缩方法应有的速度优势。在真实长 prompt 场景下，压缩后 KV 较小，速度应与 SnapKV 相近。
+### 改进方法（SnapKV 变体）
 
-### 改进方法
+三种改进在滑动窗口协议下 PPL 差异 **<0.01**，未能拉开差距：
 
-三种改进（Sink 保护、Adaptive Per-Head、组合）对 PPL 的提升均在 **0.01 量级以内**，未能拉开明显差距。
+1. **Pythia-70M 仅 8 heads**：entropy 加权与等权几乎等价；
+2. **Sink 已被自然选中**：50% 压缩率下前 4 token 常进入 top-k；
+3. **总预算固定**：选取策略可优化空间有限。
 
-分析原因：
-
-1. **Pythia-70M 头数少（8 heads/layer）**：各 head 的 attention 熵差异有限，entropy-weighted 聚合与等权平均在小模型上几乎等价；
-2. **Sink token 已被自然选中**：在 50% 压缩率下，前 4 个 token 的 attention score 本身就足以进入 top-k，强制保留与否差别微乎其微；
-3. **固定 k_ratio 限制了上限**：在总 KV 预算不变的前提下，改变选取策略的收益空间本就有限。
-
-这一结论本身也有参考价值：**在小规模模型（< 1B）上，KV 选取策略的精细化带来的收益极为有限；这类改进的价值更多体现在头数多（≥ 32）、上下文更长的大模型场景中。**
+结论：在 <1B 小模型上，KV 选取精细化收益有限；更大模型、更长上下文更值得探索（也是小组 TieredKV 的动机）。
 
 ---
 
