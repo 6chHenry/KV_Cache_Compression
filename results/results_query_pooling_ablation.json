@@ -1,0 +1,39 @@
+{
+  "setup": {
+    "backbone": "snapkv_sink_adaptive",
+    "model": "EleutherAI/pythia-70m",
+    "k_ratio": 0.5,
+    "k_sink": 4,
+    "obs_window": 32,
+    "local_window": 32,
+    "gen_len": 200,
+    "exp_lambda": 0.9,
+    "topk_q": 8
+  },
+  "query_pooling_ablation": {
+    "mean": {
+      "wikitext2_ppl": 42.2271,
+      "pg19_ppl": 31.3026,
+      "decode_tps": 116.13,
+      "peak_mem_mb": 290.8
+    },
+    "exp": {
+      "wikitext2_ppl": 42.1823,
+      "pg19_ppl": 31.2478,
+      "decode_tps": 206.84,
+      "peak_mem_mb": 290.8
+    },
+    "max": {
+      "wikitext2_ppl": 42.6766,
+      "pg19_ppl": 31.3269,
+      "decode_tps": 218.1,
+      "peak_mem_mb": 288.6
+    },
+    "topk_mean": {
+      "wikitext2_ppl": 42.394,
+      "pg19_ppl": 31.3013,
+      "decode_tps": 203.56,
+      "peak_mem_mb": 290.8
+    }
+  }
+}

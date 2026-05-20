@@ -47,7 +47,30 @@ def load_model():
 
 # ── 公共工具：计算 entropy-weighted importance ─────────────────────────────────
 
-def _entropy_weighted_importance(obs_attn):
+def _pool_query_per_head(obs_attn, query_pool="mean", exp_lambda=0.9, topk_q=8):
+    """
+    对 obs_attn [B, H, obs, S_k] 先去掉 batch，再按 query 维池化，返回 [H, S_k]。
+    """
+    qk = obs_attn[0]  # [H, obs, S_k]
+    obs_len = qk.size(1)
+
+    if query_pool == "mean":
+        return qk.mean(dim=1)
+    if query_pool == "exp":
+        lam = min(max(exp_lambda, 1e-4), 0.9999)
+        exps = torch.arange(obs_len - 1, -1, -1, device=qk.device)
+        weights = lam ** exps
+        weights = weights / (weights.sum() + 1e-9)
+        return (qk * weights.view(1, obs_len, 1)).sum(dim=1)
+    if query_pool == "max":
+        return qk.max(dim=1).values
+    if query_pool == "topk_mean":
+        k = max(1, min(int(topk_q), obs_len))
+        return qk.topk(k, dim=1).values.mean(dim=1)
+    raise ValueError(f"Unsupported query_pool: {query_pool}")
+
+
+def _entropy_weighted_importance(obs_attn, query_pool="mean", exp_lambda=0.9, topk_q=8):
     """
     给定 obs_attn [B, H, obs, S_k]，返回 entropy-weighted importance [S_k]。
 
@@ -55,16 +78,17 @@ def _entropy_weighted_importance(obs_attn):
     2. 对每个 head 算 softmax entropy → entropy [H]
     3. 归一化 entropy 为权重，加权聚合 → importance [S_k]
     """
-    head_imp  = obs_attn.mean(dim=2)[0]                              # [H, S_k]
+    head_imp  = _pool_query_per_head(obs_attn, query_pool, exp_lambda, topk_q)  # [H, S_k]
     head_dist = head_imp.softmax(dim=-1)                             # [H, S_k]
     entropy   = -(head_dist * (head_dist + 1e-9).log()).sum(dim=-1)  # [H]
     weights   = entropy / (entropy.sum() + 1e-9)                     # [H]
     return (head_imp * weights.unsqueeze(-1)).sum(dim=0)             # [S_k]
 
 
-def _equal_weight_importance(obs_attn):
+def _equal_weight_importance(obs_attn, query_pool="mean", exp_lambda=0.9, topk_q=8):
     """标准 SnapKV：对 head 和 obs 等权平均 → importance [S_k]。"""
-    return obs_attn.mean(dim=1).mean(dim=1)[0]   # [S_k]
+    head_imp = _pool_query_per_head(obs_attn, query_pool, exp_lambda, topk_q)
+    return head_imp.mean(dim=0)   # [S_k]
 
 
 # ── 方法 A：SnapKV + Sink 保护 ─────────────────────────────────────────────────
@@ -73,6 +97,7 @@ def compress_kv_sink(
     past_kv, attentions,
     k_sink: int = 4, k_ratio: float = 0.5,
     obs_window: int = 32, local_window: int = 32,
+    query_pool: str = "mean", exp_lambda: float = 0.9, topk_q: int = 8,
 ):
     """
     强制保留前 k_sink 个 token（Attention Sink），
@@ -89,7 +114,9 @@ def compress_kv_sink(
         obs_start  = max(0, S_q - obs_window)
         obs_attn   = attn_w[:, :, obs_start:, :]
 
-        importance = _equal_weight_importance(obs_attn)   # [S_k]
+        importance = _equal_weight_importance(
+            obs_attn, query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q
+        )   # [S_k]
 
         sink_idx  = torch.arange(0, k_sink, device=DEVICE)
         mid_end   = S - local_window
@@ -114,6 +141,7 @@ def compress_kv_adaptive(
     past_kv, attentions,
     k_ratio: float = 0.5,
     obs_window: int = 32, local_window: int = 32,
+    query_pool: str = "mean", exp_lambda: float = 0.9, topk_q: int = 8,
 ):
     """
     Entropy-weighted importance 聚合：
@@ -129,7 +157,9 @@ def compress_kv_adaptive(
         obs_start = max(0, S_q - obs_window)
         obs_attn  = attn_w[:, :, obs_start:, :]
 
-        importance    = _entropy_weighted_importance(obs_attn)   # [S_k]
+        importance    = _entropy_weighted_importance(
+            obs_attn, query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q
+        )   # [S_k]
         candidate_len = S - local_window
         k_select      = max(1, int(candidate_len * k_ratio))
         topk_idx      = importance[:candidate_len].topk(k_select).indices.sort().values
@@ -147,6 +177,7 @@ def compress_kv_sink_adaptive(
     past_kv, attentions,
     k_sink: int = 4, k_ratio: float = 0.5,
     obs_window: int = 32, local_window: int = 32,
+    query_pool: str = "mean", exp_lambda: float = 0.9, topk_q: int = 8,
 ):
     """
     Sink 强制保护 + Entropy-Weighted 中间区域选取的组合。
@@ -161,7 +192,9 @@ def compress_kv_sink_adaptive(
         obs_start = max(0, S_q - obs_window)
         obs_attn  = attn_w[:, :, obs_start:, :]
 
-        importance = _entropy_weighted_importance(obs_attn)   # [S_k]
+        importance = _entropy_weighted_importance(
+            obs_attn, query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q
+        )   # [S_k]
 
         sink_idx = torch.arange(0, k_sink, device=DEVICE)
         mid_end  = S - local_window
@@ -322,6 +355,10 @@ def main():
     parser.add_argument("--k_ratio",      type=float, default=0.5)
     parser.add_argument("--obs_window",   type=int,   default=32)
     parser.add_argument("--local_window", type=int,   default=32)
+    parser.add_argument("--query_pool", type=str, default="mean",
+                        choices=["mean", "exp", "max", "topk_mean"])
+    parser.add_argument("--exp_lambda", type=float, default=0.9)
+    parser.add_argument("--topk_q", type=int, default=8)
     parser.add_argument("--pg19_tokens",  type=int,   default=8192)
     parser.add_argument("--gen_len",      type=int,   default=200)
     parser.add_argument("--skip_ppl",   action="store_true")
@@ -333,7 +370,8 @@ def main():
     tokenizer, model = load_model()
     print(f"模型参数量: {sum(p.numel() for p in model.parameters())/1e6:.1f}M")
     print(f"超参：k_sink={args.k_sink}, k_ratio={args.k_ratio}, "
-          f"obs={args.obs_window}, local={args.local_window}\n")
+          f"obs={args.obs_window}, local={args.local_window}, "
+          f"query_pool={args.query_pool}, lambda={args.exp_lambda}, topk_q={args.topk_q}\n")
 
     # ── 定义三种方法 ──
     from functools import partial
@@ -342,16 +380,19 @@ def main():
             compress_kv_sink,
             k_sink=args.k_sink, k_ratio=args.k_ratio,
             obs_window=args.obs_window, local_window=args.local_window,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda, topk_q=args.topk_q,
         ),
         "snapkv_adaptive": partial(
             compress_kv_adaptive,
             k_ratio=args.k_ratio,
             obs_window=args.obs_window, local_window=args.local_window,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda, topk_q=args.topk_q,
         ),
         "snapkv_sink_adaptive": partial(
             compress_kv_sink_adaptive,
             k_sink=args.k_sink, k_ratio=args.k_ratio,
             obs_window=args.obs_window, local_window=args.local_window,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda, topk_q=args.topk_q,
         ),
     }
 

@@ -1,0 +1,49 @@
+{
+  "setup": {
+    "method": "sink_treekv",
+    "model": "EleutherAI/pythia-70m",
+    "k_ratio": 0.5,
+    "k_sink": 4,
+    "obs_window": 32,
+    "local_window": 32,
+    "n_levels": 4,
+    "exp_lambda": 0.9,
+    "topk_q": 8,
+    "ppl_protocol": "integrated_sliding, 20-book PG-19",
+    "long_benchmark": "4096-token prefill + 100-token decode"
+  },
+  "query_pooling_ablation": {
+    "mean": {
+      "wikitext2_ppl": 41.7775,
+      "pg19_ppl_avg": 37.1744,
+      "pg19_ppl_std": 12.0189,
+      "throughput_tps_long": 4898.13,
+      "decode_tps_long": 215.27,
+      "peak_mem_mb_long": 4240.7
+    },
+    "exp": {
+      "wikitext2_ppl": 41.754,
+      "pg19_ppl_avg": 37.1714,
+      "pg19_ppl_std": 12.0094,
+      "throughput_tps_long": 4785.58,
+      "decode_tps_long": 201.59,
+      "peak_mem_mb_long": 4242.9
+    },
+    "max": {
+      "wikitext2_ppl": 41.9116,
+      "pg19_ppl_avg": 37.2128,
+      "pg19_ppl_std": 12.0109,
+      "throughput_tps_long": 4980.77,
+      "decode_tps_long": 212.96,
+      "peak_mem_mb_long": 4242.9
+    },
+    "topk_mean": {
+      "wikitext2_ppl": 41.8217,
+      "pg19_ppl_avg": 37.1822,
+      "pg19_ppl_std": 12.0207,
+      "throughput_tps_long": 5501.32,
+      "decode_tps_long": 227.12,
+      "peak_mem_mb_long": 4242.9
+    }
+  }
+}

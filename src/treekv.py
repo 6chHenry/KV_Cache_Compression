@@ -70,6 +70,9 @@ def compress_kv_treekv(
     obs_window: int = 32,
     local_window: int = 32,
     n_levels: int   = 4,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
 ):
     """
     TreeKV 树形 top-k 压缩。直接 in-place 修改 past_kv.layers[i].keys / .values。
@@ -99,8 +102,13 @@ def compress_kv_treekv(
         obs_st  = max(0, S_q - obs_window)
         obs_attn = attn_w[:, :, obs_st:, :]    # [B, H, obs, S_k]
 
-        # 等权聚合各 head 的 attention → 每个 key 位置的重要性
-        importance = obs_attn.mean(dim=1).mean(dim=1)[0]   # [S_k]
+        # 先聚合 head，再按 query 维做池化，得到每个 key 的重要性
+        importance = _aggregate_query_attention(
+            obs_attn,
+            query_pool=query_pool,
+            exp_lambda=exp_lambda,
+            topk_q=topk_q,
+        )   # [S_k]
 
         hist_len     = S - local_window
         chunk        = hist_len // n_levels
@@ -134,6 +142,37 @@ def compress_kv_treekv(
         layer.values = layer.values[:, :, all_idx, :]
 
 
+# ── Query 维聚合策略 ────────────────────────────────────────────────────────────
+
+def _aggregate_query_attention(
+    obs_attn: torch.Tensor,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
+):
+    """
+    将 obs_attn [B, H, obs, S_k] 聚合为 importance [S_k]。
+    先对 head 平均，再在 query 维上做池化。
+    """
+    query_key = obs_attn.mean(dim=1)[0]  # [obs, S_k]
+    obs_len = query_key.size(0)
+
+    if query_pool == "mean":
+        return query_key.mean(dim=0)
+    if query_pool == "exp":
+        lam = min(max(exp_lambda, 1e-4), 0.9999)
+        exps = torch.arange(obs_len - 1, -1, -1, device=query_key.device)
+        weights = lam ** exps
+        weights = weights / (weights.sum() + 1e-9)
+        return (query_key * weights.unsqueeze(-1)).sum(dim=0)
+    if query_pool == "max":
+        return query_key.max(dim=0).values
+    if query_pool == "topk_mean":
+        k = max(1, min(int(topk_q), obs_len))
+        return query_key.topk(k, dim=0).values.mean(dim=0)
+    raise ValueError(f"Unsupported query_pool: {query_pool}")
+
+
 # ── 滑动窗口 PPL（带 TreeKV 压缩）────────────────────────────────────────────
 
 def compute_treekv_ppl(
@@ -145,6 +184,9 @@ def compute_treekv_ppl(
     obs_window: int = 32,
     local_window: int = 32,
     n_levels: int   = 4,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
 ):
     """
     TreeKV PPL 评估：
@@ -178,6 +220,7 @@ def compute_treekv_ppl(
             past_kv, attentions,
             k_ratio=k_ratio, obs_window=obs_window,
             local_window=local_window, n_levels=n_levels,
+            query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q,
         )
 
         # ── Step 3: 显式 position_ids，修正 RoPE 位置偏移 ──
@@ -222,6 +265,9 @@ def benchmark_treekv_generation(
     obs_window: int   = 32,
     local_window: int = 32,
     n_levels: int     = 4,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
 ):
     """
     TreeKV 生成 benchmark:
@@ -242,7 +288,8 @@ def benchmark_treekv_generation(
     attentions = out.attentions
     compress_kv_treekv(past_kv, attentions,
                        k_ratio=k_ratio, obs_window=obs_window,
-                       local_window=local_window, n_levels=n_levels)
+                       local_window=local_window, n_levels=n_levels,
+                       query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q)
     torch.cuda.synchronize()
     t_prefill = time.perf_counter() - t0
 
@@ -267,6 +314,9 @@ def benchmark_treekv_generation(
         "obs_window"           : obs_window,
         "local_window"         : local_window,
         "n_levels"             : n_levels,
+        "query_pool"           : query_pool,
+        "exp_lambda"           : exp_lambda,
+        "topk_q"               : topk_q,
         "prompt_tokens"        : prompt_len,
         "generated_tokens"     : gen_len,
         "kv_len_after_compress": kv_len_after_compress,
@@ -280,7 +330,8 @@ def benchmark_treekv_generation(
 # ── wikitext PPL ───────────────────────────────────────────────────────────────
 
 def eval_wikitext(model, tokenizer, max_length=2048, stride=512,
-                  k_ratio=0.5, obs_window=32, local_window=32, n_levels=4):
+                  k_ratio=0.5, obs_window=32, local_window=32, n_levels=4,
+                  query_pool="mean", exp_lambda=0.9, topk_q=8):
     from datasets import load_dataset
     print("\n[wikitext-2-raw-v1] 加载测试集...")
     dataset = load_dataset("wikitext", "wikitext-2-raw-v1",
@@ -298,6 +349,7 @@ def eval_wikitext(model, tokenizer, max_length=2048, stride=512,
         stride=stride, max_length=max_length,
         k_ratio=k_ratio, obs_window=obs_window,
         local_window=local_window, n_levels=n_levels,
+        query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q,
     )
     print(f"  [TreeKV wikitext-2] PPL = {ppl:.4f}  "
           f"(NLL={nll_mean:.4f}, tokens={n_tokens:,})")
@@ -306,6 +358,7 @@ def eval_wikitext(model, tokenizer, max_length=2048, stride=512,
 
 def eval_pg19(model, tokenizer, max_length=2048, stride=512,
               k_ratio=0.5, obs_window=32, local_window=32, n_levels=4,
+              query_pool="mean", exp_lambda=0.9, topk_q=8,
               pg19_tokens=8192, sample_idx=0):
     pg19_path = os.path.join(CACHE_DIR, "pg19_test_5samples.json")
     with open(pg19_path, encoding="utf-8") as f:
@@ -325,6 +378,7 @@ def eval_pg19(model, tokenizer, max_length=2048, stride=512,
         stride=stride, max_length=max_length,
         k_ratio=k_ratio, obs_window=obs_window,
         local_window=local_window, n_levels=n_levels,
+        query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q,
     )
     print(f"  [TreeKV pg-19] PPL = {ppl:.4f}  "
           f"(NLL={nll_mean:.4f}, tokens={n_tokens:,})")
@@ -343,6 +397,10 @@ def main():
     parser.add_argument("--local_window", type=int,   default=32)
     parser.add_argument("--n_levels",     type=int,   default=4,
                         help="树的层数（n_levels=4 → 几何预算比例 1:2:4:8）")
+    parser.add_argument("--query_pool", type=str, default="mean",
+                        choices=["mean", "exp", "max", "topk_mean"])
+    parser.add_argument("--exp_lambda", type=float, default=0.9)
+    parser.add_argument("--topk_q", type=int, default=8)
     parser.add_argument("--pg19_tokens",  type=int,   default=8192)
     parser.add_argument("--gen_len",      type=int,   default=200)
     parser.add_argument("--skip_ppl",   action="store_true")
@@ -353,6 +411,9 @@ def main():
     print("加载模型（eager attention + fp32）...")
     tokenizer, model = load_model()
     print(f"模型参数量: {sum(p.numel() for p in model.parameters())/1e6:.1f}M")
+    print(f"超参：k_ratio={args.k_ratio}, obs={args.obs_window}, local={args.local_window}, "
+          f"n_levels={args.n_levels}, query_pool={args.query_pool}, "
+          f"lambda={args.exp_lambda}, topk_q={args.topk_q}")
 
     results = {}
 
@@ -362,12 +423,14 @@ def main():
             max_length=args.max_length, stride=args.stride,
             k_ratio=args.k_ratio, obs_window=args.obs_window,
             local_window=args.local_window, n_levels=args.n_levels,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda, topk_q=args.topk_q,
         )
         pg_ppl = eval_pg19(
             model, tokenizer,
             max_length=args.max_length, stride=args.stride,
             k_ratio=args.k_ratio, obs_window=args.obs_window,
             local_window=args.local_window, n_levels=args.n_levels,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda, topk_q=args.topk_q,
             pg19_tokens=args.pg19_tokens,
         )
         results["wikitext2_ppl"] = round(wt_ppl, 4)
@@ -383,6 +446,7 @@ def main():
             gen_len=args.gen_len,
             k_ratio=args.k_ratio, obs_window=args.obs_window,
             local_window=args.local_window, n_levels=args.n_levels,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda, topk_q=args.topk_q,
         )
         for k, v in bench.items():
             print(f"  {k}: {v}")

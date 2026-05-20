@@ -7,12 +7,15 @@
     "obs_window": 32,
     "local_window": 32,
     "n_levels": 4,
+    "query_pool": "mean",
+    "exp_lambda": 0.9,
+    "topk_q": 8,
     "prompt_tokens": 21,
     "generated_tokens": 200,
     "kv_len_after_compress": 21,
-    "prefill_sec": 0.0332,
-    "decode_sec": 4.4112,
-    "decode_tps": 45.34,
+    "prefill_sec": 0.0094,
+    "decode_sec": 0.9151,
+    "decode_tps": 218.56,
     "peak_mem_mb": 286.4
   }
 }

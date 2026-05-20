@@ -46,6 +46,9 @@ def compress_kv_snapkv(
     k_ratio: float = 0.5,
     obs_window: int = 32,
     local_window: int = 32,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
 ):
     """
     SnapKV: 根据 prefill attention 权重压缩 KV Cache。
@@ -72,9 +75,12 @@ def compress_kv_snapkv(
         obs_start = max(0, S_q - obs_window)
         obs_attn  = attn_w[:, :, obs_start:, :]   # [B, H, obs, S_k]
 
-        # 对 head 维度和 query 维度做平均 → 每个 key 位置的重要性分数
-        importance = obs_attn.mean(dim=1).mean(dim=1)   # [B, S_k]
-        importance = importance[0]                       # [S_k]
+        importance = _aggregate_query_attention(
+            obs_attn,
+            query_pool=query_pool,
+            exp_lambda=exp_lambda,
+            topk_q=topk_q,
+        )
 
         # 末尾 local_window 个 token 直接保留，不参与选取
         candidate_len = S - local_window
@@ -94,6 +100,37 @@ def compress_kv_snapkv(
         layer.values = layer.values[:, :, sel_idx, :]
 
 
+# ── Query 维聚合策略 ────────────────────────────────────────────────────────────
+
+def _aggregate_query_attention(
+    obs_attn: torch.Tensor,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
+):
+    """
+    将 obs_attn [B, H, obs, S_k] 聚合为 importance [S_k]。
+    先对 head 做平均，再对 query 维做不同池化。
+    """
+    query_key = obs_attn.mean(dim=1)[0]  # [obs, S_k]
+    obs_len = query_key.size(0)
+
+    if query_pool == "mean":
+        return query_key.mean(dim=0)
+    if query_pool == "exp":
+        lam = min(max(exp_lambda, 1e-4), 0.9999)
+        exps = torch.arange(obs_len - 1, -1, -1, device=query_key.device)
+        weights = lam ** exps
+        weights = weights / (weights.sum() + 1e-9)
+        return (query_key * weights.unsqueeze(-1)).sum(dim=0)
+    if query_pool == "max":
+        return query_key.max(dim=0).values
+    if query_pool == "topk_mean":
+        k = max(1, min(int(topk_q), obs_len))
+        return query_key.topk(k, dim=0).values.mean(dim=0)
+    raise ValueError(f"Unsupported query_pool: {query_pool}")
+
+
 # ── 滑动窗口 PPL（带 SnapKV 压缩）────────────────────────────────────────────
 
 def compute_snapkv_ppl(
@@ -104,6 +141,9 @@ def compute_snapkv_ppl(
     k_ratio: float = 0.5,
     obs_window: int = 32,
     local_window: int = 32,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
 ):
     """
     SnapKV PPL 评估：
@@ -150,6 +190,9 @@ def compute_snapkv_ppl(
             k_ratio=k_ratio,
             obs_window=obs_window,
             local_window=local_window,
+            query_pool=query_pool,
+            exp_lambda=exp_lambda,
+            topk_q=topk_q,
         )
 
         # ── Step 3: 用压缩 KV 对目标 token 做 forward，计算 NLL ──
@@ -199,6 +242,9 @@ def benchmark_snapkv_generation(
     k_ratio: float = 0.5,
     obs_window: int = 32,
     local_window: int = 32,
+    query_pool: str = "mean",
+    exp_lambda: float = 0.9,
+    topk_q: int = 8,
 ):
     """
     SnapKV 生成 benchmark:
@@ -221,7 +267,10 @@ def benchmark_snapkv_generation(
     compress_kv_snapkv(past_kv, attentions,
                        k_ratio=k_ratio,
                        obs_window=obs_window,
-                       local_window=local_window)
+                       local_window=local_window,
+                       query_pool=query_pool,
+                       exp_lambda=exp_lambda,
+                       topk_q=topk_q)
     torch.cuda.synchronize()
     t_prefill = time.perf_counter() - t0
 
@@ -246,6 +295,9 @@ def benchmark_snapkv_generation(
         "k_ratio"              : k_ratio,
         "obs_window"           : obs_window,
         "local_window"         : local_window,
+        "query_pool"           : query_pool,
+        "exp_lambda"           : exp_lambda,
+        "topk_q"               : topk_q,
         "prompt_tokens"        : prompt_len,
         "generated_tokens"     : gen_len,
         "kv_len_after_compress": kv_len_after_compress,
@@ -259,7 +311,8 @@ def benchmark_snapkv_generation(
 # ── wikitext PPL ───────────────────────────────────────────────────────────────
 
 def eval_wikitext(model, tokenizer, max_length=2048, stride=512,
-                  k_ratio=0.5, obs_window=32, local_window=32):
+                  k_ratio=0.5, obs_window=32, local_window=32,
+                  query_pool="mean", exp_lambda=0.9, topk_q=8):
     from datasets import load_dataset
     print("\n[wikitext-2-raw-v1] 加载测试集...")
     dataset = load_dataset("wikitext", "wikitext-2-raw-v1",
@@ -275,6 +328,7 @@ def eval_wikitext(model, tokenizer, max_length=2048, stride=512,
         model, input_ids,
         stride=stride, max_length=max_length,
         k_ratio=k_ratio, obs_window=obs_window, local_window=local_window,
+        query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q,
     )
     print(f"  [SnapKV wikitext-2] PPL = {ppl:.4f}  "
           f"(NLL={nll_mean:.4f}, tokens={n_tokens:,})")
@@ -283,6 +337,7 @@ def eval_wikitext(model, tokenizer, max_length=2048, stride=512,
 
 def eval_pg19(model, tokenizer, max_length=2048, stride=512,
               k_ratio=0.5, obs_window=32, local_window=32,
+              query_pool="mean", exp_lambda=0.9, topk_q=8,
               pg19_tokens=8192, sample_idx=0):
     pg19_path = os.path.join(CACHE_DIR, "pg19_test_5samples.json")
     with open(pg19_path, encoding="utf-8") as f:
@@ -301,6 +356,7 @@ def eval_pg19(model, tokenizer, max_length=2048, stride=512,
         model, input_ids,
         stride=stride, max_length=max_length,
         k_ratio=k_ratio, obs_window=obs_window, local_window=local_window,
+        query_pool=query_pool, exp_lambda=exp_lambda, topk_q=topk_q,
     )
     print(f"  [SnapKV pg-19] PPL = {ppl:.4f}  "
           f"(NLL={nll_mean:.4f}, tokens={n_tokens:,})")
@@ -321,6 +377,13 @@ def main():
                         help="观察的末尾 query 数量")
     parser.add_argument("--local_window", type=int,   default=32,
                         help="末尾始终保留的 token 数")
+    parser.add_argument("--query_pool", type=str, default="mean",
+                        choices=["mean", "exp", "max", "topk_mean"],
+                        help="query 维聚合方式")
+    parser.add_argument("--exp_lambda", type=float, default=0.9,
+                        help="query_pool=exp 时的指数衰减系数")
+    parser.add_argument("--topk_q", type=int, default=8,
+                        help="query_pool=topk_mean 时取 top-k query")
     parser.add_argument("--pg19_tokens",  type=int,   default=8192,
                         help="pg-19 截取 token 数")
     parser.add_argument("--gen_len",      type=int,   default=200,
@@ -340,11 +403,17 @@ def main():
         wt_ppl = eval_wikitext(model, tokenizer,
                                max_length=args.max_length, stride=args.stride,
                                k_ratio=args.k_ratio, obs_window=args.obs_window,
-                               local_window=args.local_window)
+                               local_window=args.local_window,
+                               query_pool=args.query_pool,
+                               exp_lambda=args.exp_lambda,
+                               topk_q=args.topk_q)
         pg_ppl = eval_pg19(model, tokenizer,
                            max_length=args.max_length, stride=args.stride,
                            k_ratio=args.k_ratio, obs_window=args.obs_window,
                            local_window=args.local_window,
+                           query_pool=args.query_pool,
+                           exp_lambda=args.exp_lambda,
+                           topk_q=args.topk_q,
                            pg19_tokens=args.pg19_tokens)
         results["wikitext2_ppl"] = round(wt_ppl, 4)
         results["pg19_ppl"]      = round(pg_ppl, 4)
@@ -358,6 +427,8 @@ def main():
             model, tokenizer, prompt,
             gen_len=args.gen_len, k_ratio=args.k_ratio,
             obs_window=args.obs_window, local_window=args.local_window,
+            query_pool=args.query_pool, exp_lambda=args.exp_lambda,
+            topk_q=args.topk_q,
         )
         for k, v in bench.items():
             print(f"  {k}: {v}")

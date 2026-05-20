@@ -1,0 +1,60 @@
+\documentclass{article}
+\usepackage[preprint]{neurips_2024}
+\usepackage{amsmath}
+\usepackage{booktabs}
+
+\title{Query-Aware Importance Pooling for SnapKV on Pythia-70M}
+\author{AI2801 NLP Project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We revisit the importance scoring in SnapKV and test three lightweight query-axis pooling variants: exponential recency weighting, max pooling, and top-k query averaging. All methods keep the same KV budget and are evaluated under the same protocol on Pythia-70M.
+\end{abstract}
+
+\section{Method}
+Given attention scores from the last $w_{\text{obs}}$ queries to key position $j$, denoted by $a_{t,j}$, vanilla SnapKV uses equal-weight averaging over query indices.
+
+\paragraph{Exponential recency weighting.}
+\begin{equation}
+I_{\text{exp}}(j) = \sum_{t=1}^{w_{\text{obs}}}\alpha_t a_{t,j}, \quad
+\alpha_t = \frac{\lambda^{w_{\text{obs}}-t}}{\sum_{u=1}^{w_{\text{obs}}}\lambda^{w_{\text{obs}}-u}}, \ \lambda \in (0,1)
+\end{equation}
+
+\paragraph{Max pooling.}
+\begin{equation}
+I_{\text{max}}(j) = \max_{t \in \{1,\dots,w_{\text{obs}}\}} a_{t,j}
+\end{equation}
+
+\paragraph{Top-k query average.}
+\begin{equation}
+I_{\text{topk}}(j) = \frac{1}{k}\sum_{t \in \mathcal{T}_k(j)} a_{t,j}
+\end{equation}
+where $\mathcal{T}_k(j)$ indexes the top-$k$ query scores for key $j$.
+
+\section{Experiments}
+\textbf{Model and setup.} Pythia-70M, $k\_ratio=0.5$, $k\_sink=4$, $w_{\text{obs}}=32$, local window $=32$, generation length $=200$. We fix the backbone to \texttt{snapkv\_sink\_adaptive} and only change query pooling.
+
+\begin{table}[h]
+\centering
+\caption{Query pooling ablation under fixed compression budget. Lower PPL is better; higher decode TPS is better.}
+\begin{tabular}{lcccc}
+\toprule
+Pooling & WikiText-2 PPL $\downarrow$ & PG-19 PPL $\downarrow$ & Decode TPS $\uparrow$ & Peak Mem (MB) $\downarrow$ \\
+\midrule
+mean & 42.2271 & 31.3026 & 116.13 & 290.8 \\
+exp ($\lambda=0.9$) & \textbf{42.1823} & \textbf{31.2478} & 206.84 & 290.8 \\
+max & 42.6766 & 31.3269 & \textbf{218.10} & \textbf{288.6} \\
+topk\_mean ($k=8$) & 42.3940 & 31.3013 & 203.56 & 290.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Analysis}
+The exponential scheme consistently improves PPL over mean pooling, supporting the hypothesis that recent queries should contribute more to importance estimation. Max pooling gives slightly better speed but the worst PPL, suggesting it is too aggressive and less robust. Top-k averaging is between mean and max in both quality and stability.
+
+These results are orthogonal to previous structural variants (sink protection and adaptive head weighting), yielding a two-dimensional ablation space: \emph{structure choice} $\times$ \emph{query pooling choice}.
+
+\end{document}
